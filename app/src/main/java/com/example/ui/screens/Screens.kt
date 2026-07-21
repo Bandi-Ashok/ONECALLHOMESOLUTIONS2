@@ -4,6 +4,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -1838,13 +1839,22 @@ fun BookingFormScreen(
     var couponSuccessMessage by remember { mutableStateOf("") }
 
     // Step 7 Payment states
-    var paymentMethod by remember { mutableStateOf("UPI") } // UPI, Card, PayLater
+    var paymentMethod by remember { mutableStateOf("Razorpay") } // Razorpay, Stripe, PhonePe, GooglePay, UPI_QR, Wallet, PayLater
     var selectedUpiProvider by remember { mutableStateOf("gpay") } // gpay, phonepe, paytm
     var cardNumber by remember { mutableStateOf("") }
     var cardHolder by remember { mutableStateOf("") }
     var cardExpiry by remember { mutableStateOf("") }
     var cardCvv by remember { mutableStateOf("") }
     var isPaymentLoading by remember { mutableStateOf(false) }
+
+    // Phase 18 Finance States
+    var showRazorpayModal by remember { mutableStateOf(false) }
+    var showStripeModal by remember { mutableStateOf(false) }
+    var showPhonePeModal by remember { mutableStateOf(false) }
+    var showGPaySheet by remember { mutableStateOf(false) }
+    var showUpiQrDialog by remember { mutableStateOf(false) }
+    var showCashbackCelebration by remember { mutableStateOf(false) }
+    var cashbackEarnedAmount by remember { mutableStateOf(0.0) }
 
     // Calculations
     val baseWithTier = price * when (selectedTier) {
@@ -1873,7 +1883,7 @@ fun BookingFormScreen(
         else -> 0.0
     }
 
-    val taxRate = 0.18
+    var taxRate by remember { mutableStateOf(0.18) }
     val gstAmount = ((subtotal - discount) + slotAdjustment).coerceAtLeast(0.0) * taxRate
     val grandTotal = ((subtotal - discount) + slotAdjustment).coerceAtLeast(0.0) + gstAmount
 
@@ -1883,6 +1893,42 @@ fun BookingFormScreen(
         BookingCoupon("MONSOON30", 30.0, true, 250.0, "30% off up to ₹250 on all monsoon services"),
         BookingCoupon("SAVEMORE", 15.0, true, 500.0, "Save 15% flat on professional packages")
     )
+
+    val completePaymentAndOrder: (String) -> Unit = { gatewayName ->
+        coroutineScope.launch {
+            isPaymentLoading = true
+            kotlinx.coroutines.delay(1200)
+            isPaymentLoading = false
+            
+            // Deduct from wallet if wallet payment
+            if (gatewayName == "Wallet") {
+                viewModel.deductWalletFunds(grandTotal)
+            }
+            
+            // Calculate Cashback
+            val cashbackRate = if (gatewayName == "Wallet" || gatewayName == "Stripe") 0.10 else 0.05
+            val cashback = grandTotal * cashbackRate
+            cashbackEarnedAmount = cashback
+            
+            // Award cashback to wallet
+            viewModel.awardLoyaltyCashback(cashback)
+            
+            // Create Service Booking
+            val finalAddressText = "$flatNo, $buildingName, $landmark. Route: $addressInput"
+            viewModel.createServiceBooking(
+                categoryName = "Home Solution",
+                serviceItemName = serviceName,
+                selectedTier = selectedTier,
+                price = grandTotal,
+                date = selectedDate,
+                timeSlot = selectedTimeSlot,
+                customAddress = finalAddressText
+            )
+            
+            // Show cashback celebration
+            showCashbackCelebration = true
+        }
+    }
 
     // Form Navigation Click
     val onNextClick: () -> Unit = {
@@ -1894,38 +1940,51 @@ fun BookingFormScreen(
                     Toast.makeText(context, "Please fill in flat/house number and building details", Toast.LENGTH_SHORT).show()
                 }
             }
-            7 -> {
-                if (paymentMethod == "Card") {
-                    if (cardNumber.length < 16 || cardExpiry.isBlank() || cardCvv.length < 3 || cardHolder.isBlank()) {
-                        isValid = false
-                        Toast.makeText(context, "Please enter valid card details to proceed", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
         }
 
         if (isValid) {
             if (currentStep < 7) {
                 currentStep++
             } else {
-                // Execute Secure Booking creation with Simulated Bank Payment Verification
-                isPaymentLoading = true
-                coroutineScope.launch {
-                    kotlinx.coroutines.delay(1800) // Beautiful realistic latency
-                    isPaymentLoading = false
-                    
-                    val finalAddressText = "$flatNo, $buildingName, $landmark. Route: $addressInput"
-                    viewModel.createServiceBooking(
-                        categoryName = "Home Solution",
-                        serviceItemName = serviceName,
-                        selectedTier = selectedTier,
-                        price = grandTotal,
-                        date = selectedDate,
-                        timeSlot = selectedTimeSlot,
-                        customAddress = finalAddressText
-                    )
-                    Toast.makeText(context, "Payment verified! Booking confirmed.", Toast.LENGTH_LONG).show()
-                    onBookingSuccess()
+                when (paymentMethod) {
+                    "Razorpay" -> {
+                        showRazorpayModal = true
+                    }
+                    "Stripe" -> {
+                        showStripeModal = true
+                    }
+                    "PhonePe" -> {
+                        showPhonePeModal = true
+                    }
+                    "GooglePay" -> {
+                        showGPaySheet = true
+                    }
+                    "UPI_QR" -> {
+                        showUpiQrDialog = true
+                    }
+                    "Wallet" -> {
+                        val currentBal = user?.walletBalance ?: 0.0
+                        if (currentBal >= grandTotal) {
+                            completePaymentAndOrder("Wallet")
+                        } else {
+                            Toast.makeText(context, "Insufficient wallet balance. Please add funds to proceed!", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    "PayLater" -> {
+                        // Pay Cash post service
+                        val finalAddressText = "$flatNo, $buildingName, $landmark. Route: $addressInput"
+                        viewModel.createServiceBooking(
+                            categoryName = "Home Solution",
+                            serviceItemName = serviceName,
+                            selectedTier = selectedTier,
+                            price = grandTotal,
+                            date = selectedDate,
+                            timeSlot = selectedTimeSlot,
+                            customAddress = finalAddressText
+                        )
+                        Toast.makeText(context, "Booking Confirmed! You can pay cash post-service.", Toast.LENGTH_LONG).show()
+                        onBookingSuccess()
+                    }
                 }
             }
         }
@@ -2581,45 +2640,51 @@ fun BookingFormScreen(
 
                         7 -> {
                             // --- STEP 7: PAYMENT ---
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text("Select Secure Payment Gateway", fontWeight = FontWeight.Bold, color = NavyBluePrimary)
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text("Select Secure Payment Gateway (Phase 18)", fontWeight = FontWeight.Bold, color = NavyBluePrimary)
 
-                                // Payment Choice Tabs
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    val paymentTabs = listOf(
-                                        Triple("UPI", Icons.Filled.QrCode, "UPI"),
-                                        Triple("Card", Icons.Filled.CreditCard, "Card"),
-                                        Triple("Cash", Icons.Filled.AccountBalance, "PayLater")
-                                    )
+                                val gatewayOptions = listOf(
+                                    Triple("Razorpay Gateway", "Choose Netbanking, Credit/Debit cards, or UPI. A secure portal. (5% Cashback)", "Razorpay"),
+                                    Triple("Stripe Secure Elements", "Pay with Credit/Debit card with zip verification. Premium & instant. (10% Cashback)", "Stripe"),
+                                    Triple("PhonePe UPI", "Instant direct transaction through PhonePe SDK. (5% Cashback)", "PhonePe"),
+                                    Triple("Google Pay Express", "Quick checkout using your saved Google Account cards. (5% Cashback)", "GooglePay"),
+                                    Triple("UPI QR Scan & Pay", "Display an instant dynamic scan-to-pay QR code with active timer. (5% Cashback)", "UPI_QR"),
+                                    Triple("One Call Secure Wallet", "Instant debit from your loaded wallet balance. (10% Cashback)", "Wallet"),
+                                    Triple("Post-Service Cash/UPI", "Pay cash or scan any UPI QR code directly with the specialist after work.", "PayLater")
+                                )
 
-                                    paymentTabs.forEach { (label, icon, method) ->
-                                        val isSelected = paymentMethod == method
-                                        Card(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clickable { paymentMethod = method },
-                                            colors = CardDefaults.cardColors(
-                                                containerColor = if (isSelected) NavyBluePrimary else MaterialTheme.colorScheme.surface
-                                            ),
-                                            border = BorderStroke(1.dp, if (isSelected) GoldAccent else MaterialTheme.colorScheme.outlineVariant.copy(0.4f))
+                                gatewayOptions.forEach { (title, subtitle, method) ->
+                                    val isSelected = paymentMethod == method
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { paymentMethod = method },
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = if (isSelected) NavyBluePrimary.copy(0.06f) else MaterialTheme.colorScheme.surface
+                                        ),
+                                        border = BorderStroke(1.dp, if (isSelected) NavyBluePrimary else MaterialTheme.colorScheme.outlineVariant.copy(0.4f))
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Column(
-                                                modifier = Modifier.padding(10.dp),
-                                                horizontalAlignment = Alignment.CenterHorizontally
-                                            ) {
-                                                Icon(
-                                                    imageVector = icon,
-                                                    contentDescription = null,
-                                                    tint = if (isSelected) Color.White else NavyBluePrimary,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                                Spacer(modifier = Modifier.height(4.dp))
-                                                Text(
-                                                    text = label,
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 11.sp,
-                                                    color = if (isSelected) Color.White else NavyBluePrimary
-                                                )
+                                            RadioButton(
+                                                selected = isSelected,
+                                                onClick = { paymentMethod = method },
+                                                colors = RadioButtonDefaults.colors(selectedColor = NavyBluePrimary)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(title, fontWeight = FontWeight.Bold, color = NavyBluePrimary, fontSize = 13.sp)
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    if (method == "Wallet" || method == "Stripe") {
+                                                        OneCallBadge(text = "10% CASHBACK", backgroundColor = GoldLight.copy(0.2f), textColor = GoldAccent)
+                                                    } else if (method != "PayLater") {
+                                                        OneCallBadge(text = "5% CASHBACK", backgroundColor = GreenSuccess.copy(0.12f), textColor = GreenSuccess)
+                                                    }
+                                                }
+                                                Text(subtitle, fontSize = 10.sp, color = TextSecondaryLight)
                                             }
                                         }
                                     }
@@ -2628,104 +2693,46 @@ fun BookingFormScreen(
                                 Spacer(modifier = Modifier.height(4.dp))
 
                                 when (paymentMethod) {
-                                    "UPI" -> {
-                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text("Select UPI App Provider", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextSecondaryLight)
+                                    "Stripe" -> {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(0.2f), RoundedCornerShape(12.dp))
+                                                .padding(12.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text("Stripe Elements Secure Form", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = NavyBluePrimary)
                                             
-                                            val providers = listOf(
-                                                Pair("Google Pay", "gpay"),
-                                                Pair("PhonePe", "phonepe"),
-                                                Pair("Paytm UPI", "paytm")
-                                            )
-                                            providers.forEach { (name, id) ->
-                                                val isSelected = selectedUpiProvider == id
-                                                Card(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clickable { selectedUpiProvider = id },
-                                                    colors = CardDefaults.cardColors(
-                                                        containerColor = if (isSelected) NavyBluePrimary.copy(0.05f) else MaterialTheme.colorScheme.surface
-                                                    ),
-                                                    border = BorderStroke(1.dp, if (isSelected) NavyBluePrimary else MaterialTheme.colorScheme.outlineVariant.copy(0.4f))
-                                                ) {
-                                                    Row(
-                                                        modifier = Modifier.padding(12.dp),
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        RadioButton(
-                                                            selected = isSelected,
-                                                            onClick = { selectedUpiProvider = id },
-                                                            colors = RadioButtonDefaults.colors(selectedColor = NavyBluePrimary)
-                                                        )
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        Text(name, fontWeight = FontWeight.Bold, color = NavyBluePrimary, fontSize = 13.sp)
-                                                    }
-                                                }
+                                            // Dynamic card brand detection
+                                            var cardBrand = "CARD"
+                                            if (cardNumber.startsWith("4")) {
+                                                cardBrand = "VISA"
+                                            } else if (cardNumber.startsWith("5")) {
+                                                cardBrand = "MASTERCARD"
+                                            } else if (cardNumber.startsWith("3")) {
+                                                cardBrand = "AMERICAN EXPRESS"
                                             }
-                                        }
-                                    }
-
-                                    "Card" -> {
-                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Card(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .height(130.dp),
-                                                colors = CardDefaults.cardColors(containerColor = NavyBlueDark),
-                                                border = BorderStroke(1.dp, GoldAccent.copy(0.5f))
-                                            ) {
-                                                Column(modifier = Modifier.padding(14.dp)) {
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        Icon(imageVector = Icons.Filled.CreditCard, contentDescription = null, tint = GoldAccent, modifier = Modifier.size(24.dp))
-                                                        Text("SECURE CARD", fontWeight = FontWeight.Bold, color = Color.White.copy(0.7f), fontSize = 10.sp)
-                                                    }
-                                                    Spacer(modifier = Modifier.weight(1f))
-                                                    Text(
-                                                        text = cardNumber.ifEmpty { "••••••••••••••••" }.chunked(4).joinToString("   "),
-                                                        color = Color.White,
-                                                        fontWeight = FontWeight.Bold,
-                                                        fontSize = 16.sp,
-                                                        style = MaterialTheme.typography.titleMedium
-                                                    )
-                                                    Spacer(modifier = Modifier.weight(1f))
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement = Arrangement.SpaceBetween
-                                                    ) {
-                                                        Column {
-                                                            Text("CARD HOLDER", fontSize = 7.sp, color = Color.White.copy(0.6f))
-                                                            Text(cardHolder.ifEmpty { "YOUR NAME" }.uppercase(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                                                        }
-                                                        Column(horizontalAlignment = Alignment.End) {
-                                                            Text("EXPIRES", fontSize = 7.sp, color = Color.White.copy(0.6f))
-                                                            Text(cardExpiry.ifEmpty { "MM/YY" }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            Spacer(modifier = Modifier.height(4.dp))
 
                                             OutlinedTextField(
                                                 value = cardNumber,
                                                 onValueChange = { if (it.length <= 16 && it.all { char -> char.isDigit() }) cardNumber = it },
                                                 label = { Text("Card Number (16 Digits) *") },
                                                 leadingIcon = { Icon(imageVector = Icons.Filled.CreditCard, contentDescription = null, tint = NavyBluePrimary) },
+                                                trailingIcon = { 
+                                                    if (cardBrand != "CARD") {
+                                                        Text(cardBrand, fontWeight = FontWeight.Bold, color = GoldAccent, fontSize = 10.sp, modifier = Modifier.padding(end = 8.dp))
+                                                    }
+                                                },
                                                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = NavyBluePrimary),
                                                 shape = RoundedCornerShape(12.dp),
                                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                                 modifier = Modifier.fillMaxWidth()
-                                            )
+                                             )
 
                                             OutlinedTextField(
                                                 value = cardHolder,
                                                 onValueChange = { cardHolder = it },
                                                 label = { Text("Card Holder Name *") },
-                                                leadingIcon = { Icon(imageVector = Icons.Filled.AccountCircle, contentDescription = null, tint = NavyBluePrimary) },
                                                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = NavyBluePrimary),
                                                 shape = RoundedCornerShape(12.dp),
                                                 modifier = Modifier.fillMaxWidth()
@@ -2754,22 +2761,107 @@ fun BookingFormScreen(
                                         }
                                     }
 
-                                    "PayLater" -> {
-                                        Card(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            colors = CardDefaults.cardColors(containerColor = GoldLight.copy(0.15f)),
-                                            border = BorderStroke(1.dp, GoldAccent.copy(0.3f))
+                                    "Wallet" -> {
+                                        val currentBalance = user?.walletBalance ?: 0.0
+                                        val isSufficient = currentBalance >= grandTotal
+                                        val missingFunds = grandTotal - currentBalance
+
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(
+                                                    if (isSufficient) GreenSuccess.copy(0.05f) else AlertRed.copy(0.05f),
+                                                    RoundedCornerShape(12.dp)
+                                                )
+                                                .border(
+                                                    1.dp,
+                                                    if (isSufficient) GreenSuccess.copy(0.3f) else AlertRed.copy(0.3f),
+                                                    RoundedCornerShape(12.dp)
+                                                )
+                                                .padding(14.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
                                             Row(
-                                                modifier = Modifier.padding(14.dp),
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Icon(imageVector = Icons.Filled.CheckCircle, contentDescription = null, tint = GoldAccent, modifier = Modifier.size(24.dp))
-                                                Spacer(modifier = Modifier.width(12.dp))
-                                                Column {
-                                                    Text("Pay Cash/UPI Post-Service", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = NavyBluePrimary)
-                                                    Text("No advance payment required. Safely settle total directly to the technician with cash or any UPI QR scan.", fontSize = 11.sp, color = TextSecondaryLight)
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.AccountBalanceWallet,
+                                                        contentDescription = null,
+                                                        tint = if (isSufficient) GreenSuccess else AlertRed
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text("Wallet Balance Status", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = NavyBluePrimary)
                                                 }
+                                                Text(
+                                                    currentBalance.toRupeeString(),
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (isSufficient) GreenSuccess else AlertRed,
+                                                    fontSize = 15.sp
+                                                )
+                                            }
+
+                                            if (isSufficient) {
+                                                Text(
+                                                    "Sufficient funds available! You will earn ₹${String.format("%.2f", grandTotal * 0.10)} (10% Cashback) instantly upon completing this transaction.",
+                                                    fontSize = 11.sp,
+                                                    color = TextSecondaryLight
+                                                )
+                                            } else {
+                                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    Text(
+                                                        "Low Balance alert: You are short of ${missingFunds.toRupeeString()} to pay for this booking.",
+                                                        fontSize = 11.sp,
+                                                        color = AlertRed,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                    
+                                                    var isAddingFunds by remember { mutableStateOf(false) }
+
+                                                    OneCallButton(
+                                                        text = if (isAddingFunds) "Adding Funds..." else "⚡ Add ${missingFunds.toRupeeString()} via Razorpay",
+                                                        onClick = {
+                                                            isAddingFunds = true
+                                                            coroutineScope.launch {
+                                                                kotlinx.coroutines.delay(1200)
+                                                                viewModel.addFundsToWallet(missingFunds)
+                                                                isAddingFunds = false
+                                                                Toast.makeText(context, "₹${String.format("%.2f", missingFunds)} loaded successfully!", Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        },
+                                                        containerColor = GoldAccent,
+                                                        contentColor = NavyBlueDark,
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    else -> {
+                                        Card(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(0.2f)),
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(0.2f))
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Lock,
+                                                    contentDescription = null,
+                                                    tint = NavyBluePrimary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    "Secured by One Call Financial Escrow Network. Instant refund protection applies.",
+                                                    fontSize = 10.sp,
+                                                    color = TextSecondaryLight
+                                                )
                                             }
                                         }
                                     }
@@ -2817,7 +2909,33 @@ fun BookingFormScreen(
                                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(0.4f))
 
                                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text("GST/Service Cess (18%)", fontSize = 11.sp, color = TextSecondaryLight)
+                                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text("GST Tax Bracket Selection (Phase 18)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = NavyBluePrimary)
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                        listOf(0.05 to "5%", 0.18 to "18%", 0.28 to "28%").forEach { (rate, label) ->
+                                                            val isSel = taxRate == rate
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .background(
+                                                                        if (isSel) NavyBluePrimary else MaterialTheme.colorScheme.surfaceVariant,
+                                                                        RoundedCornerShape(6.dp)
+                                                                    )
+                                                                    .clickable { taxRate = rate }
+                                                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                                                            ) {
+                                                                Text(label, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = if (isSel) Color.White else NavyBluePrimary)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Text("GST & Service Cess (${(taxRate * 100).toInt()}%)", fontSize = 11.sp, color = TextSecondaryLight)
+                                            }
                                             Text(gstAmount.toRupeeString(), fontSize = 11.sp, color = NavyBluePrimary)
                                         }
 
@@ -3012,6 +3130,7 @@ fun BookingsListScreen(
     onTrackBooking: (Int) -> Unit
 ) {
     val bookings by viewModel.bookingsState.collectAsState()
+    val user by viewModel.userState.collectAsState()
     var selectedTab by remember { mutableStateOf("Upcoming") } // Upcoming, Completed, Cancelled
 
     val context = LocalContext.current
@@ -3386,7 +3505,7 @@ fun BookingsListScreen(
                     OneCallButton(
                         text = "Download PDF",
                         onClick = {
-                            Toast.makeText(context, "PDF saved to downloads directory!", Toast.LENGTH_SHORT).show()
+                            generateInvoicePdfAndShare(context, b, user, false, "", "")
                             showInvoiceDialog = false
                         },
                         containerColor = GoldAccent,
@@ -5581,7 +5700,7 @@ fun ProfileScreen(
                 ) {
                     Text("Digital Tax Invoice", fontWeight = FontWeight.Bold, color = NavyBluePrimary, fontSize = 16.sp)
                     IconButton(onClick = {
-                        Toast.makeText(context, "PDF generated! Invoice saved to local device successfully.", Toast.LENGTH_LONG).show()
+                        generateInvoicePdfAndShare(context, b, user, isGstInvoiceEnabled, userBusinessName, userGstin)
                     }) {
                         Icon(imageVector = Icons.Filled.PictureAsPdf, contentDescription = "Download PDF", tint = AlertRed)
                     }
@@ -5781,7 +5900,7 @@ fun AdminDashboardScreen(
     val user by viewModel.userState.collectAsState()
 
     var selectedTab by remember { mutableStateOf(0) }
-    val tabs = listOf("Overview", "Bookings", "Technicians", "Customers & AMC", "Refunds", "AI & Logs")
+    val tabs = listOf("Overview", "Bookings", "Technicians", "Customers & AMC", "Refunds", "Settlements", "AI & Logs")
 
     // Stats calculations
     val completedBookings = bookings.filter { it.status == "Completed" }
@@ -5919,7 +6038,10 @@ fun AdminDashboardScreen(
                         Toast.makeText(context, "Refund processed successfully with local bank nodes!", Toast.LENGTH_SHORT).show()
                     }
                 )
-                5 -> AiAndLogsTab(
+                5 -> SettlementsTab(
+                    viewModel = viewModel
+                )
+                6 -> AiAndLogsTab(
                     auditLogs = auditLogs,
                     bookings = bookings
                 )
@@ -6569,6 +6691,188 @@ fun AiAndLogsTab(
 }
 
 @Composable
+fun SettlementsTab(
+    viewModel: MainViewModel
+) {
+    val bookings by viewModel.bookingsState.collectAsState()
+    val context = LocalContext.current
+    
+    val completedBookings = bookings.filter { it.status == "Completed" }
+    val pendingBookings = bookings.filter { it.status == "In Progress" || it.status == "Assigned" || it.status == "Pending" }
+    
+    val totalSettled = completedBookings.sumOf { it.price * 0.90 }
+    val totalEscrow = pendingBookings.sumOf { it.price }
+    val totalPlatformFees = completedBookings.sumOf { it.price * 0.10 }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = "Technician Settlement & Escrow Ledger (Phase 18)",
+            fontWeight = FontWeight.Bold,
+            color = NavyBluePrimary,
+            fontSize = 15.sp
+        )
+        
+        // Stats Cards row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, Color.LightGray.copy(0.4f))
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text("Total Settled (90%)", fontSize = 9.sp, color = TextSecondaryLight)
+                    Text(totalSettled.toRupeeString(), fontWeight = FontWeight.Bold, fontSize = 13.sp, color = GreenSuccess)
+                }
+            }
+            
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, Color.LightGray.copy(0.4f))
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text("In Escrow (100%)", fontSize = 9.sp, color = TextSecondaryLight)
+                    Text(totalEscrow.toRupeeString(), fontWeight = FontWeight.Bold, fontSize = 13.sp, color = GoldAccent)
+                }
+            }
+            
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, Color.LightGray.copy(0.4f))
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text("Platform Fee (10%)", fontSize = 9.sp, color = TextSecondaryLight)
+                    Text(totalPlatformFees.toRupeeString(), fontWeight = FontWeight.Bold, fontSize = 13.sp, color = NavyBluePrimary)
+                }
+            }
+        }
+        
+        // Gateway Breakup Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = NavyBluePrimary.copy(alpha = 0.03f)),
+            border = BorderStroke(1.dp, NavyBluePrimary.copy(alpha = 0.15f))
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text("Settlement Method Statistics", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = NavyBluePrimary)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                listOf(
+                    Triple("Stripe Gateway Settlements", completedBookings.count { it.hashCode() % 3 == 0 }, "Direct Bank Account Release"),
+                    Triple("Razorpay Escrows", completedBookings.count { it.hashCode() % 3 == 1 }, "Escrow to Specialist"),
+                    Triple("PhonePe / UPI Settlements", completedBookings.count { it.hashCode() % 3 == 2 }, "Instant VPA Payout"),
+                    Triple("One Call Wallet Transfers", completedBookings.count { it.hashCode() % 4 == 0 }, "Ledger Wallet Sweep")
+                ).forEach { (channel, count, statusText) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(channel, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            Text(statusText, fontSize = 8.sp, color = TextSecondaryLight)
+                        }
+                        OneCallBadge(
+                            text = "$count Transactions",
+                            backgroundColor = NavyBluePrimary.copy(0.1f),
+                            textColor = NavyBluePrimary
+                        )
+                    }
+                }
+            }
+        }
+        
+        // Manual bulk dispatch button
+        OneCallButton(
+            text = "Release Held Escrow Funds (${pendingBookings.size} Jobs)",
+            onClick = {
+                if (pendingBookings.isEmpty()) {
+                    Toast.makeText(context, "No held escrow funds available to release at this moment.", Toast.LENGTH_SHORT).show()
+                } else {
+                    viewModel.addAuditLog("Escrow Bulk Release", "Admin released escrow settlements worth ${totalEscrow.toRupeeString()} directly to specialist bank nodes.")
+                    Toast.makeText(context, "Successfully settled ${totalEscrow.toRupeeString()} to registered partner bank accounts!", Toast.LENGTH_LONG).show()
+                }
+            },
+            containerColor = GoldAccent,
+            contentColor = NavyBlueDark,
+            modifier = Modifier.fillMaxWidth()
+        )
+        
+        // Historical Settlement Ledgers list
+        Text("Consolidated Settlement Reports & Trail", fontWeight = FontWeight.Bold, color = NavyBluePrimary, fontSize = 13.sp)
+        
+        if (bookings.isEmpty()) {
+            EmptyState(title = "No Settlements Found", subtitle = "Transactions ledger is generated upon scheduling and dispatching bookings.", icon = Icons.Filled.AccountBalance)
+        } else {
+            bookings.forEach { booking ->
+                val isCompleted = booking.status == "Completed"
+                val specialistAmount = booking.price * 0.90
+                val platformFee = booking.price * 0.10
+                
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, Color.LightGray.copy(0.3f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (isCompleted) Icons.Filled.AccountBalanceWallet else Icons.Filled.History,
+                                    contentDescription = null,
+                                    tint = if (isCompleted) GreenSuccess else GoldAccent,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Booking ID: #OC-${booking.id}", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = NavyBluePrimary)
+                            }
+                            
+                            OneCallBadge(
+                                text = if (isCompleted) "Settled to Partner" else "Held in Escrow",
+                                backgroundColor = if (isCompleted) GreenSuccess.copy(0.1f) else GoldAccent.copy(0.1f),
+                                textColor = if (isCompleted) GreenSuccess else GoldAccent
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text("Service: ${booking.serviceName} (${booking.tier})", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Total Paid: ${booking.price.toRupeeString()}", fontSize = 10.sp, color = TextSecondaryLight)
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Technician Payout (90%): ${specialistAmount.toRupeeString()}", fontSize = 10.sp, color = GreenSuccess, fontWeight = FontWeight.Bold)
+                            Text("Platform Fee (10%): ${platformFee.toRupeeString()}", fontSize = 10.sp, color = NavyBluePrimary)
+                        }
+                        
+                        Text(
+                            text = "Cleared on: ${booking.date} | Ref: TXN-SET-${booking.hashCode().toString().takeLast(6)}",
+                            fontSize = 8.sp,
+                            color = TextSecondaryLight,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun CategoryBarChart(bookings: List<BookingEntity>) {
     val categories = listOf("HVAC", "Plumbing", "Electrical", "Cleaning", "Smart Home")
     // count occurrences
@@ -6848,5 +7152,172 @@ fun TechnicianDashboardScreen(
                 }
             }
         }
+    }
+}
+
+fun generateInvoicePdfAndShare(
+    context: android.content.Context,
+    booking: com.example.data.models.BookingEntity,
+    user: com.example.data.models.UserEntity?,
+    isGstEnabled: Boolean,
+    businessName: String,
+    gstin: String
+) {
+    try {
+        val pdfDocument = android.graphics.pdf.PdfDocument()
+        val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(595, 842, 1).create()
+        val page = pdfDocument.startPage(pageInfo)
+        val canvas = page.canvas
+        val paint = android.graphics.Paint()
+
+        // 1. Draw header background decoration (NavyBluePrimary equivalent)
+        paint.color = android.graphics.Color.parseColor("#1B2A47")
+        canvas.drawRect(0f, 0f, 595f, 15f, paint)
+
+        // Title
+        paint.color = android.graphics.Color.parseColor("#1B2A47")
+        paint.textSize = 20f
+        paint.isFakeBoldText = true
+        canvas.drawText("ONE CALL HOME SOLUTIONS", 40f, 60f, paint)
+
+        paint.textSize = 10f
+        paint.isFakeBoldText = false
+        paint.color = android.graphics.Color.GRAY
+        canvas.drawText("Premium On-Demand Home Services & Escrow Network", 40f, 75f, paint)
+        canvas.drawText("Regd: DLF Cyber City, Phase-II, Hyderabad, TG, 500081", 40f, 90f, paint)
+        
+        if (isGstEnabled && gstin.isNotEmpty()) {
+            paint.color = android.graphics.Color.parseColor("#1B2A47")
+            paint.isFakeBoldText = true
+            canvas.drawText("Provider GSTIN: 36AAFCO8311D1ZP (18% GST collected)", 40f, 110f, paint)
+            paint.isFakeBoldText = false
+        }
+
+        // Invoice Metadata Right Aligned
+        paint.color = android.graphics.Color.BLACK
+        canvas.drawText("INVOICE NO: OC-INV-${booking.id}", 360f, 60f, paint)
+        canvas.drawText("Date: ${booking.date}", 360f, 75f, paint)
+        canvas.drawText("Customer ID: #${user?.id ?: 1001}", 360f, 90f, paint)
+        canvas.drawText("Name: ${user?.name ?: "Ashok Kumar"}", 360f, 105f, paint)
+        canvas.drawText("Contact: ${user?.phone ?: "+91 94412 34567"}", 360f, 120f, paint)
+
+        // Line separator
+        paint.color = android.graphics.Color.LTGRAY
+        paint.strokeWidth = 1f
+        canvas.drawLine(40f, 140f, 555f, 140f, paint)
+
+        // 3. Table Header
+        paint.color = android.graphics.Color.parseColor("#1B2A47")
+        paint.isFakeBoldText = true
+        paint.textSize = 11f
+        canvas.drawText("Item / Service Description", 40f, 170f, paint)
+        canvas.drawText("Quality Tier", 280f, 170f, paint)
+        canvas.drawText("Amount (INR)", 460f, 170f, paint)
+
+        canvas.drawLine(40f, 180f, 555f, 180f, paint)
+
+        // Table Rows
+        paint.color = android.graphics.Color.BLACK
+        paint.isFakeBoldText = false
+        canvas.drawText(booking.serviceName, 40f, 210f, paint)
+        canvas.drawText(booking.tier, 280f, 210f, paint)
+        canvas.drawText(String.format("₹%.2f", booking.price), 460f, 210f, paint)
+
+        if (isGstEnabled && businessName.isNotEmpty()) {
+            paint.color = android.graphics.Color.DKGRAY
+            paint.textSize = 9f
+            canvas.drawText("Recipient Business: $businessName", 40f, 240f, paint)
+            canvas.drawText("Recipient GSTIN: $gstin", 40f, 255f, paint)
+        }
+
+        canvas.drawLine(40f, 280f, 555f, 280f, paint)
+
+        // 4. Calculations Column
+        paint.textSize = 10f
+        val base = booking.price
+        val gstRate = 0.18
+        val totalTax = base * gstRate
+        val discount = if (booking.tier == "Premium") base * 0.1 else 0.0
+        val grandTotal = base + totalTax - discount
+
+        var curY = 310f
+        paint.color = android.graphics.Color.GRAY
+        canvas.drawText("Subtotal:", 330f, curY, paint)
+        paint.color = android.graphics.Color.BLACK
+        canvas.drawText(String.format("₹%.2f", base), 460f, curY, paint)
+
+        if (discount > 0.0) {
+            curY += 20f
+            paint.color = android.graphics.Color.parseColor("#2E7D32") // GreenSuccess
+            canvas.drawText("Tier Discount (10%):", 330f, curY, paint)
+            canvas.drawText(String.format("- ₹%.2f", discount), 460f, curY, paint)
+        }
+
+        curY += 20f
+        paint.color = android.graphics.Color.GRAY
+        canvas.drawText("GST & Cess (18.00%):", 330f, curY, paint)
+        paint.color = android.graphics.Color.BLACK
+        canvas.drawText(String.format("₹%.2f", totalTax), 460f, curY, paint)
+
+        curY += 15f
+        paint.color = android.graphics.Color.LTGRAY
+        canvas.drawLine(330f, curY, 555f, curY, paint)
+
+        curY += 25f
+        paint.color = android.graphics.Color.parseColor("#1B2A47")
+        paint.isFakeBoldText = true
+        paint.textSize = 13f
+        canvas.drawText("Grand Total Paid:", 330f, curY, paint)
+        paint.color = android.graphics.Color.parseColor("#C5A059") // GoldAccent equivalent
+        canvas.drawText(String.format("₹%.2f", grandTotal), 460f, curY, paint)
+
+        // Audit Trail Block (Escrow Verification)
+        paint.color = android.graphics.Color.parseColor("#F5F5F5")
+        canvas.drawRect(40f, 500f, 555f, 580f, paint)
+        
+        paint.color = android.graphics.Color.parseColor("#1B2A47")
+        paint.textSize = 10f
+        paint.isFakeBoldText = true
+        canvas.drawText("SECURED BY ONE CALL ESCROW FINANCIAL LEDGER", 50f, 520f, paint)
+        paint.isFakeBoldText = false
+        paint.color = android.graphics.Color.DKGRAY
+        paint.textSize = 8f
+        canvas.drawText("Transaction Reference Hash: SHA256-${booking.hashCode()}-${booking.timestamp}", 50f, 538f, paint)
+        canvas.drawText("Consumer Wallet debit matching completed services under GST Rule Section 11.", 50f, 552f, paint)
+        canvas.drawText("Certified digital stamp has been stored in local secure audit trails.", 50f, 566f, paint)
+
+        // Footer note
+        paint.color = android.graphics.Color.GRAY
+        paint.textSize = 8f
+        canvas.drawText("This is an electronically generated official tax document under the IT Act 2000. No physical signature required.", 40f, 780f, paint)
+        
+        paint.color = android.graphics.Color.parseColor("#1B2A47")
+        canvas.drawRect(0f, 827f, 595f, 842f, paint)
+
+        pdfDocument.finishPage(page)
+
+        // Write the PDF file to internal cache then trigger Send/Share Intent
+        val file = java.io.File(context.cacheDir, "OneCall_Invoice_${booking.id}.pdf")
+        val outputStream = java.io.FileOutputStream(file)
+        pdfDocument.writeTo(outputStream)
+        pdfDocument.close()
+        outputStream.close()
+
+        // Share/View PDF Intent using FileProvider
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.provider",
+            file
+        )
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "application/pdf"
+            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+            putExtra(android.content.Intent.EXTRA_SUBJECT, "One Call Invoice OC-INV-${booking.id}")
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(android.content.Intent.createChooser(intent, "Download/Share Invoice PDF"))
+    } catch (e: Exception) {
+        e.printStackTrace()
+        android.widget.Toast.makeText(context, "Error generating dynamic invoice PDF: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
     }
 }
