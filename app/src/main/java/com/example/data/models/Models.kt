@@ -451,3 +451,13 @@ object ServiceData {
         ProductEntity(5, "Wireless Outdoor Night-Vision Security Camera", "Security", 3499.0, "Full HD 1080p camera with active deterrence spotlight, dual-way audio and local storage.", "1.5 Years", true)
     )
 }
+
+data class TransactionModel(
+    val title: String,
+    val amount: String,
+    val date: String,
+    val timestamp: Long,
+    val status: String,
+    val type: String // Debit or Credit
+)
+
