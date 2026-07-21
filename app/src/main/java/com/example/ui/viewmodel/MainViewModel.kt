@@ -17,6 +17,10 @@ import com.example.data.models.FavoriteTechnicianEntity
 import com.example.data.models.SavedPaymentMethodEntity
 import com.example.data.models.WishlistEntity
 import com.example.data.models.ReferralEntity
+import com.example.data.models.AuditLogEntity
+import com.example.data.models.CancellationReportEntity
+import com.example.data.models.RefundReportEntity
+import com.example.data.models.AmcReportEntity
 import com.example.data.repository.AppRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,6 +77,30 @@ class MainViewModel(application: Application, private val repository: AppReposit
     )
 
     val referralsState: StateFlow<List<ReferralEntity>> = repository.referralsFlow.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val auditLogsState: StateFlow<List<AuditLogEntity>> = repository.auditLogsFlow.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val cancellationReportsState: StateFlow<List<CancellationReportEntity>> = repository.cancellationReportsFlow.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val refundReportsState: StateFlow<List<RefundReportEntity>> = repository.refundReportsFlow.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val amcReportsState: StateFlow<List<AmcReportEntity>> = repository.amcReportsFlow.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
@@ -361,7 +389,130 @@ class MainViewModel(application: Application, private val repository: AppReposit
 
     fun cancelActiveBooking(bookingId: Int) {
         viewModelScope.launch {
+            val bookingList = bookingsState.value
+            val booking = bookingList.find { it.id == bookingId }
             repository.cancelBooking(bookingId)
+            
+            if (booking != null) {
+                // Add cancellation report
+                repository.addCancellation(
+                    CancellationReportEntity(
+                        bookingId = bookingId,
+                        serviceName = booking.serviceName,
+                        price = booking.price,
+                        reason = "User self-cancellation via portal",
+                        refundStatus = "Processed"
+                    )
+                )
+                // Add refund report
+                repository.addRefund(
+                    RefundReportEntity(
+                        bookingId = bookingId,
+                        serviceName = booking.serviceName,
+                        refundAmount = booking.price,
+                        transactionId = "REF-${(100000..999999).random()}",
+                        status = "Success"
+                    )
+                )
+                // Add audit log
+                repository.addAuditLog(
+                    action = "Booking Cancelled",
+                    details = "Job #${bookingId} (${booking.serviceName}) cancelled. Refund of ${booking.price} initiated successfully."
+                )
+                
+                // Refund wallet balance
+                val currentUser = userState.value
+                if (currentUser != null) {
+                    val updatedUser = currentUser.copy(
+                        walletBalance = currentUser.walletBalance + booking.price
+                    )
+                    repository.updateUserProfile(updatedUser)
+                    repository.addAuditLog(
+                        action = "Wallet Balance Refunded",
+                        details = "Refunded ${booking.price} to user ${currentUser.name}'s wallet."
+                    )
+                }
+            }
+        }
+    }
+
+    fun adminAssignTechnician(bookingId: Int, technicianName: String, technicianPhone: String) {
+        viewModelScope.launch {
+            val bookingList = bookingsState.value
+            val booking = bookingList.find { it.id == bookingId }
+            if (booking != null) {
+                val updatedBooking = booking.copy(
+                    status = "Assigned",
+                    technicianName = technicianName,
+                    technicianPhone = technicianPhone
+                )
+                repository.db.bookingDao().insertBooking(updatedBooking)
+                repository.addAuditLog(
+                    action = "Specialist Dispatched",
+                    details = "Assigned $technicianName to Job #${bookingId} (${booking.serviceName}). Status changed to Assigned."
+                )
+            }
+        }
+    }
+
+    fun adminCompleteJob(bookingId: Int) {
+        viewModelScope.launch {
+            val bookingList = bookingsState.value
+            val booking = bookingList.find { it.id == bookingId }
+            if (booking != null) {
+                repository.completeBooking(bookingId)
+                repository.addAuditLog(
+                    action = "Job Marked Completed",
+                    details = "Job #${bookingId} (${booking.serviceName}) completed. Specialist: ${booking.technicianName}."
+                )
+            }
+        }
+    }
+
+    fun adminCancelJob(bookingId: Int, reason: String) {
+        viewModelScope.launch {
+            val bookingList = bookingsState.value
+            val booking = bookingList.find { it.id == bookingId }
+            if (booking != null) {
+                repository.cancelBooking(bookingId)
+                repository.addCancellation(
+                    CancellationReportEntity(
+                        bookingId = bookingId,
+                        serviceName = booking.serviceName,
+                        price = booking.price,
+                        reason = reason,
+                        refundStatus = "Processed"
+                    )
+                )
+                repository.addRefund(
+                    RefundReportEntity(
+                        bookingId = bookingId,
+                        serviceName = booking.serviceName,
+                        refundAmount = booking.price,
+                        transactionId = "REF-${(100000..999999).random()}",
+                        status = "Success"
+                    )
+                )
+                repository.addAuditLog(
+                    action = "Job Cancelled by Admin",
+                    details = "Job #${bookingId} (${booking.serviceName}) cancelled by admin. Reason: $reason. Refund of ${booking.price} initiated."
+                )
+                
+                // Refund wallet balance if booking belongs to active user
+                val currentUser = userState.value
+                if (currentUser != null) {
+                    val updatedUser = currentUser.copy(
+                        walletBalance = currentUser.walletBalance + booking.price
+                    )
+                    repository.updateUserProfile(updatedUser)
+                }
+            }
+        }
+    }
+
+    fun addAuditLog(action: String, details: String) {
+        viewModelScope.launch {
+            repository.addAuditLog(action, details)
         }
     }
 

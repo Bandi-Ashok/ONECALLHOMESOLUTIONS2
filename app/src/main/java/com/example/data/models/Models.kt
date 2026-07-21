@@ -97,6 +97,48 @@ data class ReferralEntity(
     val rewardAmount: Double
 )
 
+@Entity(tableName = "audit_logs")
+data class AuditLogEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val action: String,
+    val details: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val adminUser: String = "Admin (Super)"
+)
+
+@Entity(tableName = "cancellation_reports")
+data class CancellationReportEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val bookingId: Int,
+    val serviceName: String,
+    val price: Double,
+    val reason: String,
+    val refundStatus: String = "Pending", // Pending, Processed
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "refund_reports")
+data class RefundReportEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val bookingId: Int,
+    val serviceName: String,
+    val refundAmount: Double,
+    val transactionId: String,
+    val status: String = "Success", // Pending, Success, Failed
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "amc_reports")
+data class AmcReportEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val customerName: String,
+    val planType: String, // Basic, Premium, Corporate
+    val price: Double,
+    val startDate: String,
+    val expiryDate: String,
+    val status: String = "Active" // Active, Expired
+)
+
 // --- Domain Models & Mock Data definitions ---
 
 data class ServiceCategory(

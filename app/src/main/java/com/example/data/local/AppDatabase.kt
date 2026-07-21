@@ -16,6 +16,10 @@ import com.example.data.models.FavoriteTechnicianEntity
 import com.example.data.models.SavedPaymentMethodEntity
 import com.example.data.models.WishlistEntity
 import com.example.data.models.ReferralEntity
+import com.example.data.models.AuditLogEntity
+import com.example.data.models.CancellationReportEntity
+import com.example.data.models.RefundReportEntity
+import com.example.data.models.AmcReportEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -138,6 +142,42 @@ interface ReferralDao {
     suspend fun insertReferral(ref: ReferralEntity): Long
 }
 
+@Dao
+interface AuditLogDao {
+    @Query("SELECT * FROM audit_logs ORDER BY timestamp DESC")
+    fun getAllLogs(): Flow<List<AuditLogEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertLog(log: AuditLogEntity): Long
+}
+
+@Dao
+interface CancellationReportDao {
+    @Query("SELECT * FROM cancellation_reports ORDER BY timestamp DESC")
+    fun getAllCancellations(): Flow<List<CancellationReportEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertCancellation(cancel: CancellationReportEntity): Long
+}
+
+@Dao
+interface RefundReportDao {
+    @Query("SELECT * FROM refund_reports ORDER BY timestamp DESC")
+    fun getAllRefunds(): Flow<List<RefundReportEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRefund(refund: RefundReportEntity): Long
+}
+
+@Dao
+interface AmcReportDao {
+    @Query("SELECT * FROM amc_reports ORDER BY startDate DESC")
+    fun getAllAmcReports(): Flow<List<AmcReportEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAmc(amc: AmcReportEntity): Long
+}
+
 @Database(
     entities = [
         UserEntity::class,
@@ -148,9 +188,13 @@ interface ReferralDao {
         FavoriteTechnicianEntity::class,
         SavedPaymentMethodEntity::class,
         WishlistEntity::class,
-        ReferralEntity::class
+        ReferralEntity::class,
+        AuditLogEntity::class,
+        CancellationReportEntity::class,
+        RefundReportEntity::class,
+        AmcReportEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -163,4 +207,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun savedPaymentMethodDao(): SavedPaymentMethodDao
     abstract fun wishlistDao(): WishlistDao
     abstract fun referralDao(): ReferralDao
+    abstract fun auditLogDao(): AuditLogDao
+    abstract fun cancellationReportDao(): CancellationReportDao
+    abstract fun refundReportDao(): RefundReportDao
+    abstract fun amcReportDao(): AmcReportDao
 }

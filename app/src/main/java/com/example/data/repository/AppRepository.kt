@@ -14,6 +14,10 @@ import com.example.data.models.FavoriteTechnicianEntity
 import com.example.data.models.SavedPaymentMethodEntity
 import com.example.data.models.WishlistEntity
 import com.example.data.models.ReferralEntity
+import com.example.data.models.AuditLogEntity
+import com.example.data.models.CancellationReportEntity
+import com.example.data.models.RefundReportEntity
+import com.example.data.models.AmcReportEntity
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.firestore.FirebaseFirestore
@@ -44,6 +48,11 @@ class AppRepository(
     val savedPaymentsFlow: Flow<List<SavedPaymentMethodEntity>> = db.savedPaymentMethodDao().getAllPayments()
     val wishlistFlow: Flow<List<WishlistEntity>> = db.wishlistDao().getWishlist()
     val referralsFlow: Flow<List<ReferralEntity>> = db.referralDao().getAllReferrals()
+    
+    val auditLogsFlow: Flow<List<AuditLogEntity>> = db.auditLogDao().getAllLogs()
+    val cancellationReportsFlow: Flow<List<CancellationReportEntity>> = db.cancellationReportDao().getAllCancellations()
+    val refundReportsFlow: Flow<List<RefundReportEntity>> = db.refundReportDao().getAllRefunds()
+    val amcReportsFlow: Flow<List<AmcReportEntity>> = db.amcReportDao().getAllAmcReports()
 
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
@@ -124,9 +133,60 @@ class AppRepository(
                 Log.d(TAG, "Seeded default wishlist.")
             }
 
+            // Seed default audit logs
+            val auditLogs = db.auditLogDao().getAllLogs().firstOrNull()
+            if (auditLogs.isNullOrEmpty()) {
+                db.auditLogDao().insertLog(AuditLogEntity(action = "System Startup", details = "Database seeded successfully. All home services catalogs updated."))
+                db.auditLogDao().insertLog(AuditLogEntity(action = "Biometric Configuration", details = "FaceID & Fingerprint security module initialized."))
+                db.auditLogDao().insertLog(AuditLogEntity(action = "Dispatch Board Sync", details = "Specialist real-time tracking linked with regional nodes."))
+                Log.d(TAG, "Seeded default audit logs.")
+            }
+
+            // Seed default cancellation reports
+            val cancellations = db.cancellationReportDao().getAllCancellations().firstOrNull()
+            if (cancellations.isNullOrEmpty()) {
+                db.cancellationReportDao().insertCancellation(CancellationReportEntity(bookingId = 991, serviceName = "Full House Deep Cleaning", price = 2499.0, reason = "Customer requested date shift to next weekend", refundStatus = "Processed"))
+                db.cancellationReportDao().insertCancellation(CancellationReportEntity(bookingId = 992, serviceName = "Sofa Spa & Shampooing", price = 899.0, reason = "Booking placed by mistake, cancelled within 5 mins", refundStatus = "Processed"))
+                db.cancellationReportDao().insertCancellation(CancellationReportEntity(bookingId = 993, serviceName = "Ceiling Fan Installation", price = 189.0, reason = "Technician delayed due to heavy rain downpour", refundStatus = "Pending"))
+                Log.d(TAG, "Seeded default cancellations.")
+            }
+
+            // Seed default refund reports
+            val refunds = db.refundReportDao().getAllRefunds().firstOrNull()
+            if (refunds.isNullOrEmpty()) {
+                db.refundReportDao().insertRefund(RefundReportEntity(bookingId = 991, serviceName = "Full House Deep Cleaning", refundAmount = 2499.0, transactionId = "TXN-REFUND-82741"))
+                db.refundReportDao().insertRefund(RefundReportEntity(bookingId = 992, serviceName = "Sofa Spa & Shampooing", refundAmount = 899.0, transactionId = "TXN-REFUND-11094"))
+                Log.d(TAG, "Seeded default refunds.")
+            }
+
+            // Seed default AMC reports
+            val amcs = db.amcReportDao().getAllAmcReports().firstOrNull()
+            if (amcs.isNullOrEmpty()) {
+                db.amcReportDao().insertAmc(AmcReportEntity(customerName = "Ashok Kumar", planType = "Premium", price = 4999.0, startDate = "2026-01-10", expiryDate = "2027-01-10", status = "Active"))
+                db.amcReportDao().insertAmc(AmcReportEntity(customerName = "Vikram Aditya", planType = "Corporate", price = 14999.0, startDate = "2026-03-15", expiryDate = "2027-03-15", status = "Active"))
+                db.amcReportDao().insertAmc(AmcReportEntity(customerName = "Sneha Reddy", planType = "Basic", price = 1999.0, startDate = "2025-05-20", expiryDate = "2026-05-20", status = "Expired"))
+                Log.d(TAG, "Seeded default AMC reports.")
+            }
+
         } catch (e: Exception) {
             Log.e(TAG, "Database seeding error: ${e.message}")
         }
+    }
+
+    suspend fun addAuditLog(action: String, details: String) = withContext(Dispatchers.IO) {
+        db.auditLogDao().insertLog(AuditLogEntity(action = action, details = details))
+    }
+
+    suspend fun addCancellation(cancel: CancellationReportEntity) = withContext(Dispatchers.IO) {
+        db.cancellationReportDao().insertCancellation(cancel)
+    }
+
+    suspend fun addRefund(refund: RefundReportEntity) = withContext(Dispatchers.IO) {
+        db.refundReportDao().insertRefund(refund)
+    }
+
+    suspend fun addAmcReport(amc: AmcReportEntity) = withContext(Dispatchers.IO) {
+        db.amcReportDao().insertAmc(amc)
     }
 
     suspend fun addAddress(address: AddressEntity) = withContext(Dispatchers.IO) {
