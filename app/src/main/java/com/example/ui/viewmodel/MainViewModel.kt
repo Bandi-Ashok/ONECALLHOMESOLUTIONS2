@@ -22,11 +22,13 @@ import com.example.data.models.CancellationReportEntity
 import com.example.data.models.RefundReportEntity
 import com.example.data.models.AmcReportEntity
 import com.example.data.repository.AppRepository
+import com.example.data.models.TransactionModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlin.random.Random
@@ -103,6 +105,75 @@ class MainViewModel(application: Application, private val repository: AppReposit
     val amcReportsState: StateFlow<List<AmcReportEntity>> = repository.amcReportsFlow.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val transactionLedgerState: StateFlow<List<TransactionModel>> = combine(
+        bookingsState,
+        refundReportsState,
+        auditLogsState
+    ) { bookings, refunds, logs ->
+        val list = mutableListOf<TransactionModel>()
+        
+        bookings.forEach { b ->
+            list.add(
+                TransactionModel(
+                    title = "Paid: ${b.serviceName}",
+                    amount = "-₹${String.format("%.2f", b.price)}",
+                    date = b.date,
+                    timestamp = b.timestamp,
+                    status = "Success",
+                    type = "Debit"
+                )
+            )
+        }
+        
+        refunds.forEach { r ->
+            val sdf = java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault())
+            val dateStr = sdf.format(java.util.Date(r.timestamp))
+            list.add(
+                TransactionModel(
+                    title = "Refund: ${r.serviceName}",
+                    amount = "+₹${String.format("%.2f", r.refundAmount)}",
+                    date = dateStr,
+                    timestamp = r.timestamp,
+                    status = r.status,
+                    type = "Credit"
+                )
+            )
+        }
+        
+        logs.filter { l -> l.action == "Wallet Funded" || l.action == "Cashback Awarded" }.forEach { l ->
+            val isCashback = l.action == "Cashback Awarded"
+            var amtVal = 0.0
+            try {
+                val segments = l.details.split("₹")
+                if (segments.size > 1) {
+                    val numberPart = segments[1].split(" ")[0].replace("'", "").replace(",", "").trim()
+                    amtVal = numberPart.toDoubleOrNull() ?: 0.0
+                }
+            } catch (e: Exception) {
+                amtVal = 150.0
+            }
+            val sdf = java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault())
+            val dateStr = sdf.format(java.util.Date(l.timestamp))
+            list.add(
+                TransactionModel(
+                    title = if (isCashback) "Cashback Reward" else "Loaded Funds via Gateway",
+                    amount = "+₹${String.format("%.2f", amtVal)}",
+                    date = dateStr,
+                    timestamp = l.timestamp,
+                    status = "Success",
+                    type = "Credit"
+                )
+            )
+        }
+        
+        list.sortByDescending { it.timestamp }
+        list
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
         initialValue = emptyList()
     )
 
@@ -569,6 +640,37 @@ class MainViewModel(application: Application, private val repository: AppReposit
                 walletBalance = currentUser.walletBalance + amount
             )
             repository.updateUserProfile(updatedUser)
+            repository.addAuditLog(
+                action = "Wallet Funded",
+                details = "Loaded ₹$amount via Secure Gateway."
+            )
+        }
+    }
+
+    fun deductWalletFunds(amount: Double) {
+        viewModelScope.launch {
+            val currentUser = userState.value ?: return@launch
+            if (currentUser.walletBalance >= amount) {
+                val updatedUser = currentUser.copy(
+                    walletBalance = currentUser.walletBalance - amount
+                )
+                repository.updateUserProfile(updatedUser)
+            }
+        }
+    }
+
+    fun awardLoyaltyCashback(amount: Double) {
+        viewModelScope.launch {
+            val currentUser = userState.value ?: return@launch
+            val updatedUser = currentUser.copy(
+                walletBalance = currentUser.walletBalance + amount,
+                rewardsPoints = currentUser.rewardsPoints + (amount / 2).toInt()
+            )
+            repository.updateUserProfile(updatedUser)
+            repository.addAuditLog(
+                action = "Cashback Awarded",
+                details = "Cashback reward of ₹$amount credited successfully."
+            )
         }
     }
 
@@ -827,3 +929,4 @@ data class BookingFlowState(
     val cardExpiry: String = "",
     val cardCvv: String = ""
 )
+
