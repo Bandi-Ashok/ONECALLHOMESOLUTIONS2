@@ -1,0 +1,6 @@
+{
+  "name": "One Call",
+  "description": "One Call Home Solutions - Complete Home Management, Repair, Renovation, and Lifestyle Services Platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
